@@ -48,6 +48,7 @@ protected:
 
 	afx_msg void OnSysCommand(UINT nID, LPARAM lParam);
 	afx_msg void OnPaint();
+	afx_msg void OnDropFiles(HDROP hDropInfo);
 	afx_msg HCURSOR OnQueryDragIcon();
 	afx_msg void OnSize(UINT nType, int cx, int cy);
 	afx_msg void OnTrackUpdate();
@@ -69,5 +70,6 @@ public:
 
 	void UpdateStatusBarInfo();
 	void *GetSQLiteDatabase();
-	
+	void ShowTablesSelectDlg();
+	void OpenOrReOpenDatabase(LPCTSTR lpFileName);
 };

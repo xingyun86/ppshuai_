@@ -112,13 +112,19 @@ public:
 	void NextRecord();
 
     /**
-     *  获取整形字段值
+     *  获取整型字段值
      *  @param nFieldIdx 列号
      *  @param nVal 整形引用值
      *  @return 获取成功，返回true；获取失败，返回false
      */
 	bool GetFieldValue(int nFieldIdx, int& nVal);
-
+	/**
+	*  获取64整型字段值
+	*  @param nFieldIdx 列号
+	*  @param nVal 整形引用值
+	*  @return 获取成功，返回true；获取失败，返回false
+	*/
+	bool GetFieldValue(int nFieldIdx, sqlite3_int64 & nVal);
     /**
      *  获取字符串字段值
      *  @param nFieldIdx 列号

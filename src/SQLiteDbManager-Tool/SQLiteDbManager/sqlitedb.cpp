@@ -219,7 +219,7 @@ bool CSQLiteDatabase::GetFieldValue(int nFieldIdx, tstring & tsVal)
 }
 
 /************************************************************************/
-/*  获取浮点型字段值                                                    */
+/*  获取整型字段值                                                    */
 /************************************************************************/
 bool CSQLiteDatabase::GetFieldValue(int nFieldIdx, int & nVal)
 {
@@ -227,6 +227,20 @@ bool CSQLiteDatabase::GetFieldValue(int nFieldIdx, int & nVal)
 	if (nFieldIdx < m_nFieldCount)
 	{
 		nVal = sqlite3_column_int(m_stmt, nFieldIdx);
+		result = true;
+	}
+	return result;
+}
+
+/************************************************************************/
+/*  获取int64整型字段值                                                    */
+/************************************************************************/
+bool CSQLiteDatabase::GetFieldValue(int nFieldIdx, sqlite3_int64 & nVal)
+{
+	bool result = false;
+	if (nFieldIdx < m_nFieldCount)
+	{
+		nVal = sqlite3_column_int64(m_stmt, nFieldIdx);
 		result = true;
 	}
 	return result;

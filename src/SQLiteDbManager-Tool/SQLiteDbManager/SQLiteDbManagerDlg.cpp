@@ -103,6 +103,7 @@ BEGIN_MESSAGE_MAP(CSQLiteDbManagerDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON_FINDER, &CSQLiteDbManagerDlg::OnBnClickedButtonFinder)
 	ON_BN_CLICKED(IDC_BUTTON_FILTER, &CSQLiteDbManagerDlg::OnBnClickedButtonFilter)
 	ON_CBN_EDITUPDATE(IDC_COMBO_FINDERFILTER, &CSQLiteDbManagerDlg::OnCBNEditUpdateComboFinderFilter)
+	ON_WM_DROPFILES()
 END_MESSAGE_MAP()
 
 
@@ -328,8 +329,7 @@ void SetStatusBarText(CStatic *pStatic, tstring strText)
 {
 	CString cs(_T(""));
 	pStatic->GetWindowText(cs);
-	tstring ts = tstring((LPCTSTR)(cs));
-	pStatic->SetWindowText(ts.c_str());
+	pStatic->SetWindowText((LPCTSTR)(cs));
 }
 
 BOOL GetCommandRecordSets(StringVector * psvHeader, StringVectorVector * psvvItemData, CSQLiteDatabase * pSQLiteDb, tstring tsSQLCommand)
@@ -434,10 +434,11 @@ BOOL GetTableRecordSets(StringVector * psvHeader, StringVectorVector * psvvItemD
 					{
 					case SQLITE_INTEGER:
 						{
-							int nVal = 0;
-							_TCHAR tVal[32] = { 0 };
+							__int64 nVal = 0;
+							_TCHAR tVal[128] = { 0 };
+							
 							pSQLiteDb->GetFieldValue(stIdx, nVal);
-							_sntprintf_s(tVal, sizeof(tVal), _T("%d"), nVal, sizeof(tVal));
+							_sntprintf_s(tVal, sizeof(tVal), _T("%lld"), nVal, sizeof(tVal));
 							ts = tVal;
 						}
 						break;
@@ -651,7 +652,8 @@ BOOL CSQLiteDbManagerDlg::OnInitDialog()
 	//添加菜单项					
 	HMENU hMenu = ::GetSystemMenu(m_hWnd, FALSE);
 	::AppendMenu(hMenu, MF_SEPARATOR, (UINT)0, NULL);
-	::AppendMenu(hMenu, MF_STRING, (UINT)IDM_SELECT_DBFILE, _T("选择数据库"));
+	::AppendMenu(hMenu, MF_STRING, (UINT)IDM_SELECT_DBFILE, _T("打开数据库"));
+	::AppendMenu(hMenu, MF_STRING, (UINT)IDM_SELECT_DBTABLE, _T("选择数据表"));
 	::SetMenu(m_hWnd, hMenu);
 
 	CMenu* pSysMenu = GetSystemMenu(FALSE);
@@ -706,10 +708,147 @@ BOOL CSQLiteDbManagerDlg::OnInitDialog()
 	
 	return TRUE;  // return TRUE  unless you set the focus to a control
 }
+void CSQLiteDbManagerDlg::ShowTablesSelectDlg()
+{
+	tstring tsResult(_T(""));
+	if (GetCommandRecordSets(&m_svHeader, &m_svvDataItem, &m_SQLiteDb, _T("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")))
+	{
+		bool bFind = false;
+		//测试对话框
+		{
+			if (!g_pTableNameList)
+			{
+				g_pTableNameList = new StringVector();
+			}
+			g_pTableNameList->clear();
+			for (size_t stIdx = 0; stIdx < m_svvDataItem.size(); stIdx++)
+			{
+				g_pTableNameList->push_back(m_svvDataItem.at(stIdx).at(0));
+			}
 
+			CCommonWindow modalDlg(NULL, this->GetSafeHwnd(), &DbTable_DialogProc);
+			INT_PTR nRet = modalDlg.DoModal();
+			if (g_pTableNameList)
+			{
+				delete g_pTableNameList;
+				g_pTableNameList = NULL;
+			}
+			if (nRet != IDOK)
+			{
+				m_SQLiteDb.Close();
+				return;
+			}
+			if (!*g_tTableName)
+			{
+				EndDialog(NULL);
+			}
+
+			m_strTableName = g_tTableName;
+		}
+		for (size_t stIdx = 0; stIdx < m_svvDataItem.size(); stIdx++)
+		{
+			if (!m_strTableName.compare(m_svvDataItem.at(stIdx).at(0)))
+			{
+				bFind = true;
+				break;
+			}
+		}
+		if (!bFind)
+		{
+			tsResult = _T("");
+			tsResult.append(m_strTableName.c_str()).append(_T("数据表不存在, 请检查打开的数据库."));
+			::MessageBox(this->GetSafeHwnd(), tsResult.c_str(), _T("错误提示"), MB_ICONERROR);
+			return;
+		}
+		else
+		{
+			tsResult = _T("");
+			tsResult.append(_T("[")).append((StrRStrI(m_strDbFileName.c_str(), NULL, _T("\\")) + 1)).append(_T("].[")).append(m_strTableName.c_str()).append(_T("]表-")).append(m_strDbFileName.c_str());
+			this->SetWindowText(tsResult.c_str());
+		}
+	}
+	else
+	{
+		tsResult = _T("");
+		tsResult.append(m_strTableName.c_str()).append(_T("数据表不存在, 请检查打开的数据库."));
+		::MessageBox(this->GetSafeHwnd(), tsResult.c_str(), _T("错误提示"), MB_ICONERROR);
+		return;
+	}
+
+	if (GetTableRecordSets(&m_svHeader, &m_svvDataItem, &m_SQLiteDb, m_strTableName))
+	{
+		//新建列
+		InsertColumnData(m_pListCtrl, &m_svHeader);
+
+		//新增数据
+		InsertItemData(m_pListCtrl, &m_svvDataItem);
+
+		UpdateStatusBarInfo();
+	}
+	else
+	{
+		::MessageBox(this->GetSafeHwnd(), _T("未获取到数据记录！"), _T("错误提示"), MB_ICONERROR);
+		return;
+	}
+}
+void CSQLiteDbManagerDlg::OpenOrReOpenDatabase(LPCTSTR lpFileName)
+{
+	////////////////////////////////////////////////////////////////////////////
+	// 重置所有参数
+
+	SetWindowText(SQLITE3_WINDOW_TITLE);
+
+	lstrcpy(G_DB_PATH, _T(""));
+	m_strDbFileName = G_DB_PATH;
+	lstrcpy(g_tTableName, _T(""));
+	m_strTableName = g_tTableName;
+	//删除所有行
+	((CListCtrl *)GetDlgItem(IDC_LIST_TABLEVIEW))->DeleteAllItems();
+
+	//删除所有列
+	while (((CListCtrl *)GetDlgItem(IDC_LIST_TABLEVIEW))->DeleteColumn(0));
+
+	////////////////////////////////////////////////////////////////////////////
+
+	lstrcpy(G_DB_PATH, lpFileName);
+	m_strDbFileName = G_DB_PATH;
+	//////////////////////////////////////////////////////////////////////////
+
+	int nVal = _taccess(m_strDbFileName.c_str(), 0);
+	if (nVal != 0)
+	{
+		::MessageBox(this->GetSafeHwnd(), _T("数据库文件不存在, 请检查打开的数据库路径."), _T("错误提示"), MB_ICONERROR);
+		return;
+	}
+	if (m_SQLiteDb.IsOpened())
+	{
+		m_SQLiteDb.Close();
+	}
+	if (m_SQLiteDb.Open(m_strDbFileName.c_str()))
+	{
+		ShowTablesSelectDlg();
+	}
+	else
+	{
+		::MessageBox(this->GetSafeHwnd(), _T("指定目录文件不是标准的数据库文件, 请检查文件是否损坏."), _T("错误提示"), MB_ICONERROR);
+		return;
+	}
+}
 void CSQLiteDbManagerDlg::OnSysCommand(UINT nID, LPARAM lParam)
 {
-	if ((nID & IDM_SELECT_DBFILE) == IDM_SELECT_DBFILE)
+	if (nID == IDM_SELECT_DBTABLE)
+	{
+		if (m_SQLiteDb.IsOpened())
+		{
+			ShowTablesSelectDlg();
+		}
+		else
+		{
+			::MessageBox(this->GetSafeHwnd(), _T("当前尚未打开数据库,请先打开数据库."), _T("错误提示"), MB_ICONERROR);
+			return;
+		}
+	}
+	else if (nID == IDM_SELECT_DBFILE)
 	{
 		OPENFILENAME ofn;       // common dialog box structure
 		_TCHAR szFile[MAX_PATH];       // buffer for file name
@@ -729,133 +868,17 @@ void CSQLiteDbManagerDlg::OnSysCommand(UINT nID, LPARAM lParam)
 		ofn.lpstrInitialDir = NULL;
 		ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
-		////////////////////////////////////////////////////////////////////////////
-		// 重置所有参数
-
-		SetWindowText(SQLITE3_WINDOW_TITLE);
-
-		lstrcpy(G_DB_PATH, _T(""));
-		m_strDbFileName = G_DB_PATH;
-		lstrcpy(g_tTableName, _T(""));
-		m_strTableName = g_tTableName;
-		//删除所有行
-		((CListCtrl *)GetDlgItem(IDC_LIST_TABLEVIEW))->DeleteAllItems();
-
-		//删除所有列
-		while (((CListCtrl *)GetDlgItem(IDC_LIST_TABLEVIEW))->DeleteColumn(0));
-
-		////////////////////////////////////////////////////////////////////////////
-
 		// Display the Open dialog box. 
 		if (GetOpenFileName(&ofn) == TRUE)
 		{
-			lstrcpy(G_DB_PATH, szFile);
-			m_strDbFileName = G_DB_PATH;
-			//////////////////////////////////////////////////////////////////////////
-
-			int nVal = _taccess(m_strDbFileName.c_str(), 0);
-			if (nVal != 0)
+			if (lstrcmpi(G_DB_PATH, szFile))
 			{
-				::MessageBox(this->GetSafeHwnd(), _T("数据库文件不存在, 请检查打开的数据库路径."), _T("错误提示"), MB_ICONERROR);
-				return;
-			}
-			if (m_SQLiteDb.IsOpened())
-			{
-				m_SQLiteDb.Close();
-			}
-			if (m_SQLiteDb.Open(m_strDbFileName.c_str()))
-			{
-				tstring tsResult(_T(""));
-				if (GetCommandRecordSets(&m_svHeader, &m_svvDataItem, &m_SQLiteDb, _T("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")))
-				{
-					bool bFind = false;
-					//测试对话框
-					{
-						if (!g_pTableNameList)
-						{
-							g_pTableNameList = new StringVector();
-						}
-						g_pTableNameList->clear();
-						for (size_t stIdx = 0; stIdx < m_svvDataItem.size(); stIdx++)
-						{
-							g_pTableNameList->push_back(m_svvDataItem.at(stIdx).at(0));
-						}
-
-						CCommonWindow modalDlg(NULL, this->GetSafeHwnd(), &DbTable_DialogProc);
-						INT_PTR nRet = modalDlg.DoModal();
-						if (g_pTableNameList)
-						{
-							delete g_pTableNameList;
-							g_pTableNameList = NULL;
-						}
-						if(nRet != IDOK)
-						{
-							m_SQLiteDb.Close();
-							return;
-						}
-						if (!*g_tTableName)
-						{
-							EndDialog(NULL);
-						}
-						
-						m_strTableName = g_tTableName;
-					}
-					for (size_t stIdx = 0; stIdx < m_svvDataItem.size(); stIdx++)
-					{
-						if (!m_strTableName.compare(m_svvDataItem.at(stIdx).at(0)))
-						{
-							bFind = true;
-							break;
-						}
-					}
-					if (!bFind)
-					{
-						tsResult = _T("");
-						tsResult.append(m_strTableName.c_str()).append(_T("数据表不存在, 请检查打开的数据库."));
-						::MessageBox(this->GetSafeHwnd(), tsResult.c_str(), _T("错误提示"), MB_ICONERROR);
-						return;
-					}
-					else
-					{
-						tsResult = _T("");
-						tsResult.append(_T("[")).append((StrRStrI(m_strDbFileName.c_str(), NULL, _T("\\")) + 1)).append(_T("].[")).append(m_strTableName.c_str()).append(_T("]表-")).append(m_strDbFileName.c_str());
-						this->SetWindowText(tsResult.c_str());
-					}
-				}
-				else
-				{
-					tsResult = _T("");
-					tsResult.append(m_strTableName.c_str()).append(_T("数据表不存在, 请检查打开的数据库."));
-					::MessageBox(this->GetSafeHwnd(), tsResult.c_str(), _T("错误提示"), MB_ICONERROR);
-					return;
-				}
-
-				if (GetTableRecordSets(&m_svHeader, &m_svvDataItem, &m_SQLiteDb, m_strTableName))
-				{
-					//新建列
-					InsertColumnData(m_pListCtrl, &m_svHeader);
-
-					//新增数据
-					InsertItemData(m_pListCtrl, &m_svvDataItem);
-
-					UpdateStatusBarInfo();
-				}
-				else
-				{
-					::MessageBox(this->GetSafeHwnd(), _T("未获取到数据记录！"), _T("错误提示"), MB_ICONERROR);
-					return;
-				}
+				OpenOrReOpenDatabase(szFile);
 			}
 			else
 			{
-				::MessageBox(this->GetSafeHwnd(), _T("指定目录文件不是标准的数据库文件, 请检查文件是否损坏."), _T("错误提示"), MB_ICONERROR);
-				return;
+				ShowTablesSelectDlg();
 			}
-		}
-		else
-		{
-			lstrcpy(G_DB_PATH, _T(""));
-			m_strDbFileName = G_DB_PATH;
 		}
 	}
 	else if ((nID & 0xFFF0) == IDM_ABOUTBOX)
@@ -1298,4 +1321,39 @@ void CSQLiteDbManagerDlg::OnCBNEditUpdateComboFinderFilter()
 void *CSQLiteDbManagerDlg::GetSQLiteDatabase()
 {
 	return (void *)&m_SQLiteDb;
+}
+
+
+void CSQLiteDbManagerDlg::OnDropFiles(HDROP hDropInfo)
+{
+	// TODO: Add your message handler code here and/or call default
+	_TCHAR szFile[MAX_PATH] = { 0 };
+	WIN32_FILE_ATTRIBUTE_DATA wfad = { 0 };
+	UINT uNum = ::DragQueryFile(hDropInfo, 0xFFFFFFFF, NULL, 0);
+
+	if (uNum)
+	{
+		for (UINT i = 0; i<uNum; i++)
+		{
+			::DragQueryFile(hDropInfo, i, szFile, _countof(szFile));
+			if (::GetFileAttributesEx(szFile, GetFileExInfoStandard, &wfad) && 
+				((wfad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != FILE_ATTRIBUTE_DIRECTORY))
+			{
+				if (lstrcmpi(G_DB_PATH, szFile))
+				{
+					OpenOrReOpenDatabase(szFile);
+				}
+				else
+				{
+					ShowTablesSelectDlg();
+				}
+				break;
+			}
+			
+		}
+	}
+
+	::DragFinish(hDropInfo);
+
+	CDialogEx::OnDropFiles(hDropInfo);
 }
